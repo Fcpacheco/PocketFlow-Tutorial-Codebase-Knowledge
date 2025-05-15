@@ -13,12 +13,23 @@ DEFAULT_INCLUDE_PATTERNS = {
     "Makefile", "*.yaml", "*.yml",
 }
 
+# Text-only mode default patterns
+TEXT_ONLY_INCLUDE_PATTERNS = {
+    "*.md", "*.txt", "*.rst", "*.markdown", "README*", "documentation/*", "docs/*", "*.html", "*.mdx"
+}
+
 DEFAULT_EXCLUDE_PATTERNS = {
     "assets/*", "data/*", "examples/*", "images/*", "public/*", "static/*", "temp/*",
     "docs/*", 
     "venv/*", ".venv/*", "*test*", "tests/*", "docs/*", "examples/*", "v1/*",
     "dist/*", "build/*", "experimental/*", "deprecated/*", "misc/*", 
     "legacy/*", ".git/*", ".github/*", ".next/*", ".vscode/*", "obj/*", "bin/*", "node_modules/*", "*.log"
+}
+
+# Text-only mode exclude patterns (more permissive with docs)
+TEXT_ONLY_EXCLUDE_PATTERNS = {
+    "venv/*", ".venv/*", "node_modules/*", ".git/*", ".github/*", ".next/*", ".vscode/*",
+    "dist/*", "build/*", "obj/*", "bin/*", "*.log"
 }
 
 # --- Main Function ---
@@ -42,6 +53,10 @@ def main():
     parser.add_argument("--no-cache", action="store_true", help="Disable LLM response caching (default: caching enabled)")
     # Add max_abstraction_num parameter to control the number of abstractions
     parser.add_argument("--max-abstractions", type=int, default=10, help="Maximum number of abstractions to identify (default: 10)")
+    # Add text-only mode flag for focusing on text files rather than code
+    parser.add_argument("--text-only", action="store_true", help="Enable text-only mode to focus on documentation files (*.md, *.txt) rather than code")
+    # Add max_tokens parameter to control the token limit for LLM requests
+    parser.add_argument("--max-tokens", type=int, default=30000, help="Maximum tokens per LLM request (default: 30000, adjust based on model limits)")
 
     args = parser.parse_args()
 
@@ -52,6 +67,10 @@ def main():
         if not github_token:
             print("Warning: No GitHub token provided. You might hit rate limits for public repositories.")
 
+    # Set include/exclude patterns based on text-only mode if not specified by user
+    include_patterns = set(args.include) if args.include else (TEXT_ONLY_INCLUDE_PATTERNS if args.text_only else DEFAULT_INCLUDE_PATTERNS)
+    exclude_patterns = set(args.exclude) if args.exclude else (TEXT_ONLY_EXCLUDE_PATTERNS if args.text_only else DEFAULT_EXCLUDE_PATTERNS)
+
     # Initialize the shared dictionary with inputs
     shared = {
         "repo_url": args.repo,
@@ -61,8 +80,8 @@ def main():
         "output_dir": args.output, # Base directory for CombineTutorial output
 
         # Add include/exclude patterns and max file size
-        "include_patterns": set(args.include) if args.include else DEFAULT_INCLUDE_PATTERNS,
-        "exclude_patterns": set(args.exclude) if args.exclude else DEFAULT_EXCLUDE_PATTERNS,
+        "include_patterns": include_patterns,
+        "exclude_patterns": exclude_patterns,
         "max_file_size": args.max_size,
 
         # Add language for multi-language support
@@ -73,6 +92,12 @@ def main():
         
         # Add max_abstraction_num parameter
         "max_abstraction_num": args.max_abstractions,
+        
+        # Add text_only flag
+        "text_only": args.text_only,
+        
+        # Add max_tokens parameter for LLM requests
+        "max_tokens": args.max_tokens,
 
         # Outputs will be populated by the nodes
         "files": [],
@@ -86,6 +111,8 @@ def main():
     # Display starting message with repository/directory and language
     print(f"Starting tutorial generation for: {args.repo or args.dir} in {args.language.capitalize()} language")
     print(f"LLM caching: {'Disabled' if args.no_cache else 'Enabled'}")
+    print(f"Mode: {'Text-only' if args.text_only else 'Code analysis'}")
+    print(f"Max tokens per request: {args.max_tokens}")
 
     # Create the flow instance
     tutorial_flow = create_tutorial_flow()

@@ -3,7 +3,7 @@ import re
 import yaml
 from pocketflow import Node, BatchNode
 from utils.crawl_github_files import crawl_github_files
-from utils.call_llm import call_llm
+from utils.call_llm import call_llm, estimate_tokens
 from utils.crawl_local_files import crawl_local_files
 
 
@@ -84,157 +84,231 @@ class FetchRepo(Node):
 class IdentifyAbstractions(Node):
     def prep(self, shared):
         files_data = shared["files"]
-        project_name = shared["project_name"]  # Get project name
-        language = shared.get("language", "english")  # Get language
-        use_cache = shared.get("use_cache", True)  # Get use_cache flag, default to True
-        max_abstraction_num = shared.get("max_abstraction_num", 10)  # Get max_abstraction_num, default to 10
+        project_name = shared["project_name"]
+        language = shared.get("language", "english")
+        use_cache = shared.get("use_cache", True)
+        max_abstraction_num = shared.get("max_abstraction_num", 10)
+        text_only = shared.get("text_only", False)
+        max_tokens = shared.get("max_tokens", 30000)  # Get max_tokens parameter
 
-        # Helper to create context from files, respecting limits (basic example)
-        def create_llm_context(files_data):
-            context = ""
-            file_info = []  # Store tuples of (index, path)
-            for i, (path, content) in enumerate(files_data):
-                entry = f"--- File Index {i}: {path} ---\n{content}\n\n"
-                context += entry
-                file_info.append((i, path))
+        # Calculate approximate token budget for instruction and other overhead
+        # Instruction, structure explanation, examples, YAML formatting, etc.
+        instruction_tokens = 2000
+        available_token_budget = max_tokens - instruction_tokens
 
-            return context, file_info  # file_info is list of (index, path)
-
-        context, file_info = create_llm_context(files_data)
-        # Format file info for the prompt (comment is just a hint for LLM)
-        file_listing_for_prompt = "\n".join(
-            [f"- {idx} # {path}" for idx, path in file_info]
-        )
-        return (
-            context,
-            file_listing_for_prompt,
-            len(files_data),
-            project_name,
-            language,
-            use_cache,
-            max_abstraction_num,
-        )  # Return all parameters
+        # Store information in instance variables for use in exec
+        self.project_name = project_name
+        self.language = language
+        self.use_cache = use_cache
+        self.max_abstraction_num = max_abstraction_num
+        self.text_only = text_only
+        self.file_count = len(files_data)
+        
+        # Group files into chunks that fit within token budget
+        file_chunks = []
+        current_chunk = []
+        current_chunk_tokens = 0
+        
+        for i, (path, content) in enumerate(files_data):
+            # Estimate tokens for this file entry
+            file_entry = f"--- File Index {i}: {path} ---\n{content}\n\n"
+            file_tokens = estimate_tokens(file_entry)
+            
+            # If adding this file would exceed the token budget, start a new chunk
+            if current_chunk_tokens + file_tokens > available_token_budget and current_chunk:
+                file_chunks.append(current_chunk)
+                current_chunk = []
+                current_chunk_tokens = 0
+            
+            # If a single file is too large, we'll need to truncate it
+            if file_tokens > available_token_budget:
+                # Truncate content to fit within limit
+                truncation_ratio = available_token_budget / file_tokens
+                truncated_length = int(len(content) * truncation_ratio * 0.9)  # 90% safety margin
+                truncated_content = content[:truncated_length] + "... [TRUNCATED]"
+                current_chunk.append((i, path, truncated_content))
+                current_chunk_tokens = estimate_tokens(f"--- File Index {i}: {path} ---\n{truncated_content}\n\n")
+            else:
+                # Add file to current chunk
+                current_chunk.append((i, path, content))
+                current_chunk_tokens += file_tokens
+            
+            # If current chunk is getting close to limit, start a new chunk
+            if current_chunk_tokens > available_token_budget * 0.9:  # 90% safety margin
+                file_chunks.append(current_chunk)
+                current_chunk = []
+                current_chunk_tokens = 0
+        
+        # Add the last chunk if it has any files
+        if current_chunk:
+            file_chunks.append(current_chunk)
+        
+        print(f"Divided {len(files_data)} files into {len(file_chunks)} chunks for processing")
+        
+        return file_chunks  # Return list of chunks for processing
 
     def exec(self, prep_res):
-        (
-            context,
-            file_listing_for_prompt,
-            file_count,
-            project_name,
-            language,
-            use_cache,
-            max_abstraction_num,
-        ) = prep_res  # Unpack all parameters
-        print(f"Identifying abstractions using LLM...")
+        file_chunks = prep_res
+        print(f"Identifying abstractions using LLM across {len(file_chunks)} chunks...")
+        
+        all_abstractions = []
+        
+        for chunk_index, chunk in enumerate(file_chunks):
+            print(f"Processing chunk {chunk_index + 1}/{len(file_chunks)}...")
+            
+            # Create context from chunk files
+            context = ""
+            file_info = []  # Store tuples of (index, path)
+            
+            for orig_index, path, content in chunk:
+                entry = f"--- File Index {orig_index}: {path} ---\n{content}\n\n"
+                context += entry
+                file_info.append((orig_index, path))
+            
+            # Format file info for the prompt
+            file_listing_for_prompt = "\n".join(
+                [f"- {idx} # {path}" for idx, path in file_info]
+            )
+            
+            # Add language instruction and hints only if not English
+            language_instruction = ""
+            name_lang_hint = ""
+            desc_lang_hint = ""
+            if self.language.lower() != "english":
+                language_instruction = f"IMPORTANT: Generate the `name` and `description` for each abstraction in **{self.language.capitalize()}** language. Do NOT use English for these fields.\n\n"
+                name_lang_hint = f" (value in {self.language.capitalize()})"
+                desc_lang_hint = f" (value in {self.language.capitalize()})"
 
-        # Add language instruction and hints only if not English
-        language_instruction = ""
-        name_lang_hint = ""
-        desc_lang_hint = ""
-        if language.lower() != "english":
-            language_instruction = f"IMPORTANT: Generate the `name` and `description` for each abstraction in **{language.capitalize()}** language. Do NOT use English for these fields.\n\n"
-            # Keep specific hints here as name/description are primary targets
-            name_lang_hint = f" (value in {language.capitalize()})"
-            desc_lang_hint = f" (value in {language.capitalize()})"
+            # Adapt the instruction based on text_only mode
+            if self.text_only:
+                analysis_instruction = f"""Analyze the document collection.
+Identify key concepts or topics that are important to understand the content.
 
-        prompt = f"""
-For the project `{project_name}`:
-
-Codebase Context:
-{context}
-
-{language_instruction}Analyze the codebase context.
-Identify the top 5-{max_abstraction_num} core most important abstractions to help those new to the codebase.
+For each concept, provide:
+1. A concise `name` for the concept{name_lang_hint}.
+2. A beginner-friendly `description` explaining what it means with a simple analogy, in around 100 words{desc_lang_hint}.
+3. A list of relevant `file_indices` (integers) of documents that discuss this concept, using the format `idx # path/comment`."""
+            else:
+                analysis_instruction = f"""Analyze the codebase context.
+Identify core most important abstractions to help those new to the codebase.
 
 For each abstraction, provide:
 1. A concise `name`{name_lang_hint}.
 2. A beginner-friendly `description` explaining what it is with a simple analogy, in around 100 words{desc_lang_hint}.
-3. A list of relevant `file_indices` (integers) using the format `idx # path/comment`.
+3. A list of relevant `file_indices` (integers) using the format `idx # path/comment`."""
 
-List of file indices and paths present in the context:
+            # For chunks other than the first, emphasize finding different concepts
+            if chunk_index > 0 and all_abstractions:
+                previous_abstractions = "\n".join([f"- {a['name']}" for a in all_abstractions])
+                analysis_instruction += f"\n\nIMPORTANT: The following concepts have already been identified in previous chunks:\n{previous_abstractions}\n\nPlease try to identify DIFFERENT concepts that are not in this list."
+
+            prompt = f"""
+For the project `{self.project_name}`:
+
+{'Documentation' if self.text_only else 'Codebase'} Context (CHUNK {chunk_index + 1}/{len(file_chunks)}):
+{context}
+
+{language_instruction}{analysis_instruction}
+
+List of file indices and paths present in this chunk:
 {file_listing_for_prompt}
 
 Format the output as a YAML list of dictionaries:
 
 ```yaml
 - name: |
-    Query Processing{name_lang_hint}
+    {'Documentation Structure' if self.text_only else 'Query Processing'}{name_lang_hint}
   description: |
-    Explains what the abstraction does.
+    {'Explains how the documentation is organized to help users find information efficiently.' if self.text_only else 'Explains what the abstraction does.'} 
     It's like a central dispatcher routing requests.{desc_lang_hint}
   file_indices:
-    - 0 # path/to/file1.py
-    - 3 # path/to/related.py
-- name: |
-    Query Optimization{name_lang_hint}
-  description: |
-    Another core concept, similar to a blueprint for objects.{desc_lang_hint}
-  file_indices:
-    - 5 # path/to/another.js
-# ... up to {max_abstraction_num} abstractions
+    - 0 # path/to/file1.{'md' if self.text_only else 'py'}
+    - 3 # path/to/related.{'txt' if self.text_only else 'py'}
+# ... more concepts
 ```"""
-        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))  # Use cache only if enabled and not retrying
+            
+            response = call_llm(prompt, use_cache=(self.use_cache and self.cur_retry == 0))
 
-        # --- Validation ---
-        yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
-        abstractions = yaml.safe_load(yaml_str)
+            # --- Validation ---
+            yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
+            chunk_abstractions = yaml.safe_load(yaml_str)
 
-        if not isinstance(abstractions, list):
-            raise ValueError("LLM Output is not a list")
+            if not isinstance(chunk_abstractions, list):
+                raise ValueError("LLM Output is not a list")
 
-        validated_abstractions = []
-        for item in abstractions:
-            if not isinstance(item, dict) or not all(
-                k in item for k in ["name", "description", "file_indices"]
-            ):
-                raise ValueError(f"Missing keys in abstraction item: {item}")
-            if not isinstance(item["name"], str):
-                raise ValueError(f"Name is not a string in item: {item}")
-            if not isinstance(item["description"], str):
-                raise ValueError(f"Description is not a string in item: {item}")
-            if not isinstance(item["file_indices"], list):
-                raise ValueError(f"file_indices is not a list in item: {item}")
+            validated_chunk_abstractions = []
+            for item in chunk_abstractions:
+                if not isinstance(item, dict) or not all(
+                    k in item for k in ["name", "description", "file_indices"]
+                ):
+                    raise ValueError(f"Missing keys in abstraction item: {item}")
+                if not isinstance(item["name"], str):
+                    raise ValueError(f"Name is not a string in item: {item}")
+                if not isinstance(item["description"], str):
+                    raise ValueError(f"Description is not a string in item: {item}")
+                if not isinstance(item["file_indices"], list):
+                    raise ValueError(f"file_indices is not a list in item: {item}")
 
-            # Validate indices
-            validated_indices = []
-            for idx_entry in item["file_indices"]:
-                try:
-                    if isinstance(idx_entry, int):
-                        idx = idx_entry
-                    elif isinstance(idx_entry, str) and "#" in idx_entry:
-                        idx = int(idx_entry.split("#")[0].strip())
-                    else:
-                        idx = int(str(idx_entry).strip())
+                # Validate indices
+                validated_indices = []
+                for idx_entry in item["file_indices"]:
+                    try:
+                        if isinstance(idx_entry, int):
+                            idx = idx_entry
+                        elif isinstance(idx_entry, str) and "#" in idx_entry:
+                            idx = int(idx_entry.split("#")[0].strip())
+                        else:
+                            idx = int(str(idx_entry).strip())
 
-                    if not (0 <= idx < file_count):
+                        if not (0 <= idx < self.file_count):
+                            raise ValueError(
+                                f"Invalid file index {idx} found in item {item['name']}. Max index is {self.file_count - 1}."
+                            )
+                        validated_indices.append(idx)
+                    except (ValueError, TypeError):
                         raise ValueError(
-                            f"Invalid file index {idx} found in item {item['name']}. Max index is {file_count - 1}."
+                            f"Could not parse index from entry: {idx_entry} in item {item['name']}"
                         )
-                    validated_indices.append(idx)
-                except (ValueError, TypeError):
-                    raise ValueError(
-                        f"Could not parse index from entry: {idx_entry} in item {item['name']}"
-                    )
 
-            item["files"] = sorted(list(set(validated_indices)))
-            # Store only the required fields
-            validated_abstractions.append(
-                {
-                    "name": item["name"],  # Potentially translated name
-                    "description": item[
-                        "description"
-                    ],  # Potentially translated description
-                    "files": item["files"],
-                }
-            )
-
-        print(f"Identified {len(validated_abstractions)} abstractions.")
-        return validated_abstractions
+                item["files"] = sorted(list(set(validated_indices)))
+                # Store only the required fields
+                validated_chunk_abstractions.append(
+                    {
+                        "name": item["name"],
+                        "description": item["description"],
+                        "files": item["files"],
+                    }
+                )
+            
+            # Add to cumulative list of abstractions
+            all_abstractions.extend(validated_chunk_abstractions)
+            
+            print(f"Identified {len(validated_chunk_abstractions)} abstractions in chunk {chunk_index + 1}")
+        
+        # Consolidate similar abstractions by comparing names (simplistic approach)
+        consolidated_abstractions = []
+        seen_names = set()
+        
+        for abstr in all_abstractions:
+            # Simple name normalization for comparison
+            norm_name = abstr["name"].lower().strip()
+            
+            # Skip if we've seen a similar name already
+            if any(norm_name in seen for seen in seen_names):
+                continue
+                
+            seen_names.add(norm_name)
+            consolidated_abstractions.append(abstr)
+            
+            # Limit to max_abstraction_num
+            if len(consolidated_abstractions) >= self.max_abstraction_num:
+                break
+                
+        print(f"Consolidated to {len(consolidated_abstractions)} unique abstractions")
+        return consolidated_abstractions
 
     def post(self, shared, prep_res, exec_res):
-        shared["abstractions"] = (
-            exec_res  # List of {"name": str, "description": str, "files": [int]}
-        )
+        shared["abstractions"] = exec_res
 
 
 class AnalyzeRelationships(Node):

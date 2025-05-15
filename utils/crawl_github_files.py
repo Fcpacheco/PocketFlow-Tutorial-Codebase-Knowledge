@@ -36,6 +36,12 @@ def crawl_github_files(
     Returns:
         dict: Dictionary with files and statistics
     """
+    # Debug: Check if token is present
+    if token:
+        print(f"Token is provided (first 4 chars: {token[:4]}...)")
+    else:
+        print("No token provided")
+        
     # Convert single pattern to set
     if include_patterns and isinstance(include_patterns, str):
         include_patterns = {include_patterns}
@@ -135,17 +141,108 @@ def crawl_github_files(
     owner = path_parts[0]
     repo = path_parts[1]
     
+    print(f"Accessing repository: {owner}/{repo}")
+    
+    # Try direct HTTPS clone instead of API requests
+    # This can be more reliable for public repositories
+    try:
+        print("Trying direct HTTPS clone approach...")
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            # For public repos, we don't need auth
+            clone_url = f"https://github.com/{owner}/{repo}.git"
+            print(f"Cloning from: {clone_url}")
+            
+            try:
+                git_repo = git.Repo.clone_from(clone_url, tmpdirname)
+                
+                # Determine branch/ref to use
+                branch = "main"  # Default branch
+                if len(path_parts) > 3 and path_parts[2] == "tree":
+                    branch = path_parts[3]
+                    print(f"Checking out branch/ref: {branch}")
+                    git_repo.git.checkout(branch)
+                    
+                # Determine subdirectory to focus on
+                subdir = ""
+                if len(path_parts) > 4 and path_parts[2] == "tree":
+                    subdir = '/'.join(path_parts[4:])
+                    print(f"Using subdirectory: {subdir}")
+                
+                target_dir = os.path.join(tmpdirname, subdir) if subdir else tmpdirname
+                
+                # Walk directory
+                files = {}
+                skipped_files = []
+                
+                for root, dirs, filenames in os.walk(target_dir):
+                    for filename in filenames:
+                        abs_path = os.path.join(root, filename)
+                        rel_path = os.path.relpath(abs_path, target_dir)
+                        
+                        # Check file size
+                        try:
+                            file_size = os.path.getsize(abs_path)
+                        except OSError:
+                            continue
+                            
+                        if file_size > max_file_size:
+                            skipped_files.append((rel_path, file_size))
+                            print(f"Skipping {rel_path}: size {file_size} exceeds limit {max_file_size}")
+                            continue
+                            
+                        # Check include/exclude patterns
+                        if not should_include_file(rel_path, filename):
+                            print(f"Skipping {rel_path}: does not match include/exclude patterns")
+                            continue
+                            
+                        # Read content
+                        try:
+                            with open(abs_path, "r", encoding="utf-8") as f:
+                                content = f.read()
+                            files[rel_path] = content
+                            print(f"Added {rel_path} ({file_size} bytes)")
+                        except Exception as e:
+                            print(f"Failed to read {rel_path}: {e}")
+                            
+                return {
+                    "files": files,
+                    "stats": {
+                        "downloaded_count": len(files),
+                        "skipped_count": len(skipped_files),
+                        "skipped_files": skipped_files,
+                        "base_path": subdir if subdir else None,
+                        "include_patterns": include_patterns,
+                        "exclude_patterns": exclude_patterns,
+                        "source": "https_clone"
+                    }
+                }
+            except Exception as e:
+                print(f"HTTPS clone approach failed: {e}")
+                # Continue to API-based approach
+    except Exception as e:
+        print(f"Error in HTTPS clone attempt: {e}")
+    
+    # If direct clone failed, fall back to API approach
+    print("Falling back to GitHub API approach...")
+    
     # Setup for GitHub API
     headers = {"Accept": "application/vnd.github.v3+json"}
     if token:
-        headers["Authorization"] = f"token {token}"
+        # Try both token formats
+        headers["Authorization"] = f"Bearer {token}"
+        print("Using Bearer token authentication")
+    else:
+        print("No authentication token provided, API rate limits may apply")
 
     def fetch_branches(owner: str, repo: str):
         """Get brancshes of the repository"""
 
         url = f"https://api.github.com/repos/{owner}/{repo}/branches"
+        print(f"Fetching branches from: {url}")
         response = requests.get(url, headers=headers)
-
+        
+        print(f"Response status: {response.status_code}")
+        
         if response.status_code == 404:
             if not token:
                 print(f"Error 404: Repository not found or is private.\n"
@@ -157,6 +254,11 @@ def crawl_github_files(
             
         if response.status_code != 200:
             print(f"Error fetching the branches of {owner}/{repo}: {response.status_code} - {response.text}")
+            # If Bearer token didn't work, try the older 'token' format
+            if token and "Bearer" in headers["Authorization"]:
+                print("Trying with older 'token' format...")
+                headers["Authorization"] = f"token {token}"
+                return fetch_branches(owner, repo)
             return []
 
         return response.json()

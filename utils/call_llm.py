@@ -1,4 +1,4 @@
-from google import genai
+from openai import OpenAI
 import os
 import logging
 import json
@@ -25,10 +25,30 @@ logger.addHandler(file_handler)
 cache_file = "llm_cache.json"
 
 
-# By default, we Google Gemini 2.5 pro, as it shows great performance for code understanding
+# Function to estimate token count (rough estimate: ~4 chars = 1 token)
+def estimate_tokens(text):
+    """
+    Estimate the number of tokens in a text string.
+    This is a rough approximation based on the GPT tokenizer behavior.
+    
+    Args:
+        text (str): Text to estimate token count for
+        
+    Returns:
+        int: Estimated token count
+    """
+    # Simple estimation: ~4 characters per token
+    return len(text) // 4
+
+
+# By default, we use OpenAI GPT-4
 def call_llm(prompt: str, use_cache: bool = True) -> str:
     # Log the prompt
     logger.info(f"PROMPT: {prompt}")
+    
+    # Estimate token count
+    token_estimate = estimate_tokens(prompt)
+    logger.info(f"Estimated token count: {token_estimate}")
 
     # Check cache if enabled
     if use_cache:
@@ -38,31 +58,23 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
             try:
                 with open(cache_file, "r") as f:
                     cache = json.load(f)
-            except:
-                logger.warning(f"Failed to load cache, starting with empty cache")
+            except Exception as e:
+                logger.error(f"Failed to load cache: {e}")
 
         # Return from cache if exists
         if prompt in cache:
             logger.info(f"RESPONSE: {cache[prompt]}")
             return cache[prompt]
 
-    # # Call the LLM if not in cache or cache disabled
-    # client = genai.Client(
-    #     vertexai=True,
-    #     # TODO: change to your own project id and location
-    #     project=os.getenv("GEMINI_PROJECT_ID", "your-project-id"),
-    #     location=os.getenv("GEMINI_LOCATION", "us-central1")
-    # )
-
-    # You can comment the previous line and use the AI Studio key instead:
-    client = genai.Client(
-        api_key=os.getenv("GEMINI_API_KEY", ""),
-    )
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-pro-exp-03-25")
-    # model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-preview-04-17")
+    # Call the OpenAI API if not in cache or cache disabled
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     
-    response = client.models.generate_content(model=model, contents=[prompt])
-    response_text = response.text
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    response_text = response.choices[0].message.content
 
     # Log the response
     logger.info(f"RESPONSE: {response_text}")
@@ -75,8 +87,8 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
             try:
                 with open(cache_file, "r") as f:
                     cache = json.load(f)
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Failed to load cache: {e}")
 
         # Add to cache and save
         cache[prompt] = response_text
@@ -89,8 +101,63 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
     return response_text
 
 
+# # Google Gemini implementation (commented out)
+# def call_llm_gemini(prompt: str, use_cache: bool = True) -> str:
+#     from google import genai
+#     # Log the prompt
+#     logger.info(f"PROMPT: {prompt}")
+#
+#     # Check cache if enabled
+#     if use_cache:
+#         # Load cache from disk
+#         cache = {}
+#         if os.path.exists(cache_file):
+#             try:
+#                 with open(cache_file, "r") as f:
+#                     cache = json.load(f)
+#             except:
+#                 logger.warning("Failed to load cache, starting with empty cache")
+#
+#         # Return from cache if exists
+#         if prompt in cache:
+#             logger.info(f"RESPONSE: {cache[prompt]}")
+#             return cache[prompt]
+#
+#     client = genai.Client(
+#         api_key=os.getenv("GEMINI_API_KEY", ""),
+#     )
+#     model = os.getenv("GEMINI_MODEL", "gemini-2.5-pro-exp-03-25")
+#     
+#     response = client.models.generate_content(model=model, contents=[prompt])
+#     response_text = response.text
+#
+#     # Log the response
+#     logger.info(f"RESPONSE: {response_text}")
+#
+#     # Update cache if enabled
+#     if use_cache:
+#         # Load cache again to avoid overwrites
+#         cache = {}
+#         if os.path.exists(cache_file):
+#             try:
+#                 with open(cache_file, "r") as f:
+#                     cache = json.load(f)
+#             except:
+#                 pass
+#
+#         # Add to cache and save
+#         cache[prompt] = response_text
+#         try:
+#             with open(cache_file, "w") as f:
+#                 json.dump(cache, f)
+#         except Exception as e:
+#             logger.error(f"Failed to save cache: {e}")
+#
+#     return response_text
+
+
 # # Use Anthropic Claude 3.7 Sonnet Extended Thinking
-# def call_llm(prompt, use_cache: bool = True):
+# def call_llm_claude(prompt, use_cache: bool = True):
 #     from anthropic import Anthropic
 #     client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", "your-api-key"))
 #     response = client.messages.create(
@@ -106,27 +173,12 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
 #     )
 #     return response.content[1].text
 
-# # Use OpenAI o1
-# def call_llm(prompt, use_cache: bool = True):
-#     from openai import OpenAI
-#     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", "your-api-key"))
-#     r = client.chat.completions.create(
-#         model="o1",
-#         messages=[{"role": "user", "content": prompt}],
-#         response_format={
-#             "type": "text"
-#         },
-#         reasoning_effort="medium",
-#         store=False
-#     )
-#     return r.choices[0].message.content
-
-# Use OpenRouter API
-# def call_llm(prompt: str, use_cache: bool = True) -> str:
+# # Use OpenRouter API
+# def call_llm_openrouter(prompt: str, use_cache: bool = True) -> str:
 #     import requests
 #     # Log the prompt
 #     logger.info(f"PROMPT: {prompt}")
-
+#
 #     # Check cache if enabled
 #     if use_cache:
 #         # Load cache from disk
@@ -137,31 +189,31 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
 #                     cache = json.load(f)
 #             except:
 #                 logger.warning(f"Failed to load cache, starting with empty cache")
-
+#
 #         # Return from cache if exists
 #         if prompt in cache:
 #             logger.info(f"RESPONSE: {cache[prompt]}")
 #             return cache[prompt]
-
+#
 #     # OpenRouter API configuration
 #     api_key = os.getenv("OPENROUTER_API_KEY", "")
 #     model = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
-    
+#     
 #     headers = {
 #         "Authorization": f"Bearer {api_key}",
 #     }
-
+#
 #     data = {
 #         "model": model,
 #         "messages": [{"role": "user", "content": prompt}]
 #     }
-
+#
 #     response = requests.post(
 #         "https://openrouter.ai/api/v1/chat/completions",
 #         headers=headers,
 #         json=data
 #     )
-
+#
 #     if response.status_code != 200:
 #         error_msg = f"OpenRouter API call failed with status {response.status_code}: {response.text}"
 #         logger.error(error_msg)
@@ -172,11 +224,11 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
 #         error_msg = f"Failed to parse OpenRouter response: {e}; Response: {response.text}"
 #         logger.error(error_msg)        
 #         raise Exception(error_msg)
-    
-
+#     
+#
 #     # Log the response
 #     logger.info(f"RESPONSE: {response_text}")
-
+#
 #     # Update cache if enabled
 #     if use_cache:
 #         # Load cache again to avoid overwrites
@@ -187,7 +239,7 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
 #                     cache = json.load(f)
 #             except:
 #                 pass
-
+#
 #         # Add to cache and save
 #         cache[prompt] = response_text
 #         try:
@@ -195,7 +247,7 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
 #                 json.dump(cache, f)
 #         except Exception as e:
 #             logger.error(f"Failed to save cache: {e}")
-
+#
 #     return response_text
 
 if __name__ == "__main__":

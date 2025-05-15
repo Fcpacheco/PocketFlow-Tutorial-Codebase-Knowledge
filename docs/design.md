@@ -15,10 +15,13 @@ nav_order: 2
 
 **User Story:** As a developer onboarding to a new codebase, I want a tutorial automatically generated from its GitHub repository or local directory, optionally in a specific language. This tutorial should explain the core abstractions, their relationships (visualized), and how they work together, using beginner-friendly language, analogies, and multi-line descriptions where needed, so I can understand the project structure and key concepts quickly without manually digging through all the code.
 
+**User Story (Text-Only Mode):** As a user analyzing a repository of instructional content (like documentation, guides, or educational material), I want a tutorial that outlines the key concepts and their relationships from text files (.md, .txt) rather than code, so I can quickly understand the conceptual framework without reading all the documentation.
+
 **Input:**
 - A publicly accessible GitHub repository URL or a local directory path.
 - A project name (optional, will be derived from the URL/directory if not provided).
 - Desired language for the tutorial (optional, defaults to English).
+- Text-only mode flag (optional, focuses on text files rather than code files).
 
 **Output:**
 - A directory named after the project containing:
@@ -43,11 +46,11 @@ This project primarily uses a **Workflow** pattern to decompose the tutorial gen
 
 ### Flow high-level Design:
 
-1.  **`FetchRepo`**: Crawls the specified GitHub repository URL or local directory using appropriate utility (`crawl_github_files` or `crawl_local_files`), retrieving relevant source code file contents.
-2.  **`IdentifyAbstractions`**: Analyzes the codebase using an LLM to identify up to 10 core abstractions, generate beginner-friendly descriptions (potentially translated if language != English), and list the *indices* of files related to each abstraction.
-3.  **`AnalyzeRelationships`**: Uses an LLM to analyze the identified abstractions (referenced by index) and their related code to generate a high-level project summary and describe the relationships/interactions between these abstractions (summary and labels potentially translated if language != English), specifying *source* and *target* abstraction indices and a concise label for each interaction.
+1.  **`FetchRepo`**: Crawls the specified GitHub repository URL or local directory using appropriate utility (`crawl_github_files` or `crawl_local_files`), retrieving relevant source code files or text files (if text-only mode is enabled) based on file patterns.
+2.  **`IdentifyAbstractions`**: Analyzes the codebase or text content using an LLM to identify up to 10 core abstractions, generate beginner-friendly descriptions (potentially translated if language != English), and list the *indices* of files related to each abstraction. In text-only mode, abstractions are based on concepts found in documentation rather than code constructs.
+3.  **`AnalyzeRelationships`**: Uses an LLM to analyze the identified abstractions (referenced by index) and their related files to generate a high-level project summary and describe the relationships/interactions between these abstractions (summary and labels potentially translated if language != English), specifying *source* and *target* abstraction indices and a concise label for each interaction.
 4.  **`OrderChapters`**: Determines the most logical order (as indices) to present the abstractions in the tutorial, considering input context which might be translated. The output order itself is language-independent.
-5.  **`WriteChapters` (BatchNode)**: Iterates through the ordered list of abstraction indices. For each abstraction, it calls an LLM to write a detailed, beginner-friendly chapter (content potentially fully translated if language != English), using the relevant code files (accessed via indices) and summaries of previously generated chapters (potentially translated) as context.
+5.  **`WriteChapters` (BatchNode)**: Iterates through the ordered list of abstraction indices. For each abstraction, it calls an LLM to write a detailed, beginner-friendly chapter (content potentially fully translated if language != English), using the relevant files (accessed via indices) and summaries of previously generated chapters (potentially translated) as context.
 6.  **`CombineTutorial`**: Creates an output directory, generates a Mermaid diagram from the relationship data (using potentially translated names/labels), and writes the project summary (potentially translated), relationship diagram, chapter links (using potentially translated names), and individually generated chapter files (potentially translated content) into it. Fixed text like "Chapters", "Source Repository", and the attribution footer remain in English.
 
 ```mermaid
@@ -98,6 +101,7 @@ shared = {
     "exclude_patterns": set(), # File patterns to exclude
     "max_file_size": 100000, # Default or user-specified max file size
     "language": "english", # Default or user-specified language for the tutorial
+    "text_only": False, # Flag to indicate text-only mode (focus on .md, .txt files)
 
     # --- Intermediate/Output Data ---
     "files": [], # Output of FetchRepo: List of tuples (file_path: str, file_content: str)
@@ -120,46 +124,46 @@ shared = {
     *   *Purpose*: Download the repository code (from GitHub) or read from a local directory, loading relevant files into memory using the appropriate crawler utility.
     *   *Type*: Regular
     *   *Steps*:
-        *   `prep`: Read `repo_url`, `local_dir`, `project_name`, `github_token`, `output_dir`, `include_patterns`, `exclude_patterns`, `max_file_size` from shared store. Determine `project_name` from `repo_url` or `local_dir` if not present in shared. Set `use_relative_paths` flag.
+        *   `prep`: Read `repo_url`, `local_dir`, `project_name`, `github_token`, `output_dir`, `include_patterns`, `exclude_patterns`, `max_file_size`, `text_only` from shared store. Determine `project_name` from `repo_url` or `local_dir` if not present in shared. Set `use_relative_paths` flag. If `text_only` is True, override `include_patterns` to focus on text files like "*.md", "*.txt", "*.rst" and adapt `exclude_patterns` accordingly.
         *   `exec`: If `repo_url` is present, call `crawl_github_files(...)`. Otherwise, call `crawl_local_files(...)`. Convert the resulting `files` dictionary into a list of `(path, content)` tuples.
         *   `post`: Write the list of `files` tuples and the derived `project_name` (if applicable) to the shared store.
 
 2.  **`IdentifyAbstractions`**
-    *   *Purpose*: Analyze the code to identify key concepts/abstractions using indices. Generates potentially translated names and descriptions if language is not English.
+    *   *Purpose*: Analyze the code or text content to identify key concepts/abstractions using indices. Generates potentially translated names and descriptions if language is not English.
     *   *Type*: Regular
     *   *Steps*:
-        *   `prep`: Read `files` (list of tuples), `project_name`, and `language` from shared store. Create context using `create_llm_context` helper which adds file indices. Format the list of `index # path` for the prompt.
-        *   `exec`: Construct a prompt for `call_llm`. If language is not English, add instructions to generate `name` and `description` in the target language. Ask LLM to identify ~5-10 core abstractions, provide a simple description for each, and list the relevant *file indices* (e.g., `- 0 # path/to/file.py`). Request YAML list output. Parse and validate the YAML, ensuring indices are within bounds and converting entries like `0 # path...` to just the integer `0`.
-        *   `post`: Write the validated list of `abstractions` (e.g., `[{"name": "Node", "description": "...", "files": [0, 3, 5]}, ...]`) containing file *indices* and potentially translated `name`/`description` to the shared store.
+        *   `prep`: Read `files` (list of tuples), `project_name`, `language`, and `text_only` from shared store. Create context using `create_llm_context` helper which adds file indices. Format the list of `index # path` for the prompt.
+        *   `exec`: Construct a prompt for `call_llm`. If `text_only` is True, adapt the prompt to focus on identifying key concepts from documentation rather than code structures. If language is not English, add instructions to generate `name` and `description` in the target language. Ask LLM to identify ~5-10 core abstractions/concepts, provide a simple description for each, and list the relevant *file indices* (e.g., `- 0 # path/to/file.md`). Request YAML list output. Parse and validate the YAML, ensuring indices are within bounds and converting entries like `0 # path...` to just the integer `0`.
+        *   `post`: Write the validated list of `abstractions` (e.g., `[{"name": "Concept", "description": "...", "files": [0, 3, 5]}, ...]`) containing file *indices* and potentially translated `name`/`description` to the shared store.
 
 3.  **`AnalyzeRelationships`**
     *   *Purpose*: Generate a project summary and describe how the identified abstractions interact using indices and concise labels. Generates potentially translated summary and labels if language is not English.
     *   *Type*: Regular
     *   *Steps*:
-        *   `prep`: Read `abstractions`, `files`, `project_name`, and `language` from shared store. Format context for the LLM, including potentially translated abstraction names *and indices*, potentially translated descriptions, and content snippets from related files (referenced by `index # path` using `get_content_for_indices` helper). Prepare the list of `index # AbstractionName` (potentially translated) for the prompt.
-        *   `exec`: Construct a prompt for `call_llm`. If language is not English, add instructions to generate `summary` and `label` in the target language, and note that input names might be translated. Ask for (1) a high-level summary and (2) a list of relationships, each specifying `from_abstraction` (e.g., `0 # Abstraction1`), `to_abstraction` (e.g., `1 # Abstraction2`), and a concise `label`. Request structured YAML output. Parse and validate, converting referenced abstractions to indices (`from: 0, to: 1`).
+        *   `prep`: Read `abstractions`, `files`, `project_name`, `language`, and `text_only` from shared store. Format context for the LLM, including potentially translated abstraction names *and indices*, potentially translated descriptions, and content snippets from related files (referenced by `index # path` using `get_content_for_indices` helper). Prepare the list of `index # AbstractionName` (potentially translated) for the prompt.
+        *   `exec`: Construct a prompt for `call_llm`. If `text_only` is True, adapt the prompt to focus on conceptual relationships rather than code-based relationships. If language is not English, add instructions to generate `summary` and `label` in the target language, and note that input names might be translated. Ask for (1) a high-level summary and (2) a list of relationships, each specifying `from_abstraction` (e.g., `0 # Abstraction1`), `to_abstraction` (e.g., `1 # Abstraction2`), and a concise `label`. Request structured YAML output. Parse and validate, converting referenced abstractions to indices (`from: 0, to: 1`).
         *   `post`: Parse the LLM response and write the `relationships` dictionary (`{"summary": "...", "details": [{"from": 0, "to": 1, "label": "..."}, ...]}`) with indices and potentially translated `summary`/`label` to the shared store.
 
 4.  **`OrderChapters`**
     *   *Purpose*: Determine the sequence (as indices) in which abstractions should be presented. Considers potentially translated input context.
     *   *Type*: Regular
     *   *Steps*:
-        *   `prep`: Read `abstractions`, `relationships`, `project_name`, and `language` from the shared store. Prepare context including the list of `index # AbstractionName` (potentially translated) and textual descriptions of relationships referencing indices and using the potentially translated `label`. Note in context if summary/names might be translated.
-        *   `exec`: Construct a prompt for `call_llm` asking it to order the abstractions based on importance, foundational concepts, or dependencies. Request output as an ordered YAML list of `index # AbstractionName`. Parse and validate, extracting only the indices and ensuring all are present exactly once.
+        *   `prep`: Read `abstractions`, `relationships`, `project_name`, `language`, and `text_only` from the shared store. Prepare context including the list of `index # AbstractionName` (potentially translated) and textual descriptions of relationships referencing indices and using the potentially translated `label`. Note in context if summary/names might be translated.
+        *   `exec`: Construct a prompt for `call_llm` asking it to order the abstractions based on importance, foundational concepts, or dependencies. If `text_only` is True, adapt the prompt to suggest a logical learning or reading order for the concepts. Request output as an ordered YAML list of `index # AbstractionName`. Parse and validate, extracting only the indices and ensuring all are present exactly once.
         *   `post`: Write the validated ordered list of indices (`chapter_order`) to the shared store.
 
 5.  **`WriteChapters`**
     *   *Purpose*: Generate the detailed content for each chapter of the tutorial. Generates potentially fully translated chapter content if language is not English.
     *   *Type*: **BatchNode**
     *   *Steps*:
-        *   `prep`: Read `chapter_order` (indices), `abstractions`, `files`, `project_name`, and `language` from shared store. Initialize an empty instance variable `self.chapters_written_so_far`. Return an iterable list where each item corresponds to an *abstraction index* from `chapter_order`. Each item should contain chapter number, potentially translated abstraction details, a map of related file content (`{ "idx # path": content }`), full chapter listing (potentially translated names), chapter filename map, previous/next chapter info (potentially translated names), and language.
-        *   `exec(item)`: Construct a prompt for `call_llm`. If language is not English, add detailed instructions to write the *entire* chapter in the target language, translating explanations, examples, etc., while noting which input context might already be translated. Ask LLM to write a beginner-friendly Markdown chapter. Provide potentially translated concept details. Include a summary of previously written chapters (potentially translated). Provide relevant code snippets. Add the generated (potentially translated) chapter content to `self.chapters_written_so_far` for the next iteration's context. Return the chapter content.
+        *   `prep`: Read `chapter_order` (indices), `abstractions`, `files`, `project_name`, `language`, and `text_only` from shared store. Initialize an empty instance variable `self.chapters_written_so_far`. Return an iterable list where each item corresponds to an *abstraction index* from `chapter_order`. Each item should contain chapter number, potentially translated abstraction details, a map of related file content (`{ "idx # path": content }`), full chapter listing (potentially translated names), chapter filename map, previous/next chapter info (potentially translated names), and language.
+        *   `exec(item)`: Construct a prompt for `call_llm`. If `text_only` is True, adapt the prompt to focus on explaining concepts from documentation rather than code functionality. If language is not English, add detailed instructions to write the *entire* chapter in the target language, translating explanations, examples, etc., while noting which input context might already be translated. Ask LLM to write a beginner-friendly Markdown chapter. Provide potentially translated concept details. Include a summary of previously written chapters (potentially translated). Provide relevant text content. Add the generated (potentially translated) chapter content to `self.chapters_written_so_far` for the next iteration's context. Return the chapter content.
         *   `post(shared, prep_res, exec_res_list)`: `exec_res_list` contains the generated chapter Markdown content strings (potentially translated), ordered correctly. Assign this list directly to `shared["chapters"]`. Clean up `self.chapters_written_so_far`.
 
 6.  **`CombineTutorial`**
     *   *Purpose*: Assemble the final tutorial files, including a Mermaid diagram using potentially translated labels/names. Fixed text remains English.
     *   *Type*: Regular
     *   *Steps*:
-        *   `prep`: Read `project_name`, `relationships` (potentially translated summary/labels), `chapter_order` (indices), `abstractions` (potentially translated name/desc), `chapters` (list of potentially translated content), `repo_url`, and `output_dir` from shared store. Generate a Mermaid `flowchart TD` string based on `relationships["details"]`, using indices to identify nodes (potentially translated names) and the concise `label` (potentially translated) for edges. Construct the content for `index.md` (including potentially translated summary, Mermaid diagram, and ordered links to chapters using potentially translated names derived using `chapter_order` and `abstractions`). Define the output directory path (e.g., `./output_dir/project_name`). Prepare a list of `{ "filename": "01_...", "content": "..." }` for chapters, adding the English attribution footer to each chapter's content. Add the English attribution footer to the index content.
+        *   `prep`: Read `project_name`, `relationships` (potentially translated summary/labels), `chapter_order` (indices), `abstractions` (potentially translated name/desc), `chapters` (list of potentially translated content), `repo_url`, `text_only`, and `output_dir` from shared store. Generate a Mermaid `flowchart TD` string based on `relationships["details"]`, using indices to identify nodes (potentially translated names) and the concise `label` (potentially translated) for edges. Construct the content for `index.md` (including potentially translated summary, Mermaid diagram, and ordered links to chapters using potentially translated names derived using `chapter_order` and `abstractions`). Define the output directory path (e.g., `./output_dir/project_name`). Prepare a list of `{ "filename": "01_...", "content": "..." }` for chapters, adding the English attribution footer to each chapter's content. Add the English attribution footer to the index content.
         *   `exec`: Create the output directory. Write the generated `index.md` content. Iterate through the prepared chapter file list and write each chapter's content to its corresponding `.md` file in the output directory.
         *   `post`: Write the final `output_path` to `shared["final_output_dir"]`. Log completion.
