@@ -1,6 +1,7 @@
 import dotenv
 import os
 import argparse
+from typing import TypedDict, Set, List, Optional, Dict, Any, cast
 # Import the function that creates the flow
 from flow import create_tutorial_flow
 
@@ -31,6 +32,28 @@ TEXT_ONLY_EXCLUDE_PATTERNS = {
     "venv/*", ".venv/*", "node_modules/*", ".git/*", ".github/*", ".next/*", ".vscode/*",
     "dist/*", "build/*", "obj/*", "bin/*", "*.log"
 }
+
+# Define TypedDict for the 'shared' dictionary
+class SharedDict(TypedDict):
+    repo_url: Optional[str]
+    local_dir: Optional[str]
+    project_name: Optional[str]
+    github_token: Optional[str]
+    output_dir: str
+    include_patterns: Set[str]
+    exclude_patterns: Set[str]
+    max_file_size: int
+    language: str
+    use_cache: bool
+    max_abstraction_num: int
+    text_only: bool
+    max_tokens: int
+    files: List[Any]
+    abstractions: List[Any]
+    relationships: Dict[Any, Any]
+    chapter_order: List[Any]
+    chapters: List[Any]
+    final_output_dir: Optional[str]
 
 # --- Main Function ---
 def main():
@@ -72,7 +95,7 @@ def main():
     exclude_patterns = set(args.exclude) if args.exclude else (TEXT_ONLY_EXCLUDE_PATTERNS if args.text_only else DEFAULT_EXCLUDE_PATTERNS)
 
     # Initialize the shared dictionary with inputs
-    shared = {
+    shared: SharedDict = {
         "repo_url": args.repo,
         "local_dir": args.dir,
         "project_name": args.name, # Can be None, FetchRepo will derive it
@@ -118,7 +141,7 @@ def main():
     tutorial_flow = create_tutorial_flow()
 
     # Run the flow
-    tutorial_flow.run(shared)
+    tutorial_flow.run(cast(Dict[str, Any], shared)) # type: ignore
 
 if __name__ == "__main__":
     main()

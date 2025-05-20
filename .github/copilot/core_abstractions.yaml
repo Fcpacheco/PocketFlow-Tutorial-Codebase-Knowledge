@@ -1,0 +1,35 @@
+core_abstractions: |
+  PocketFlow models LLM workflows as a **Graph + Shared Store**:
+
+  - **Node**: Handles simple (LLM) tasks
+  - **Flow**: Connects nodes through **Actions** (labeled edges)
+  - **Shared Store**: Enables communication between nodes within flows
+  - **Batch**: Nodes/flows allow for data-intensive tasks
+  - **Async**: Nodes/flows allow waiting for asynchronous tasks
+  - **Parallel**: Nodes/flows handle I/O-bound tasks
+
+design_patterns: |
+  From the core abstractions, PocketFlow implements popular design patterns:
+
+  - **Agent**: Autonomously makes decisions
+  - **Workflow**: Chains multiple tasks into pipelines
+  - **RAG**: Integrates data retrieval with generation
+  - **Map Reduce**: Splits data tasks into Map and Reduce steps
+  - **Structured Output**: Formats outputs consistently
+  - **Multi-Agents**: Coordinate multiple agents
+
+utility_functions: |
+  PocketFlow does not provide built-in utilities. Instead, implement your own:
+
+  - **LLM Wrapper**: For calling LLM APIs
+  - **Viz and Debug**: For visualization and debugging
+  - **Web Search**: For retrieving information from the web
+  - **Chunking**: For splitting text into manageable pieces
+  - **Embedding**: For creating vector representations of text
+  - **Vector Databases**: For storing and retrieving vectors
+  - **Text-to-Speech**: For converting text to audio
+
+  PocketFlow avoids built-in vendor-specific APIs because:
+  - **API Volatility**: Frequent changes lead to heavy maintenance
+  - **Flexibility**: You may want to switch vendors or use fine-tuned models
+  - **Optimizations**: Prompt caching, batching, and streaming are easier without vendor lock-in
