@@ -186,7 +186,7 @@ Identify key concepts or topics that are important to understand the content.
 
 For each concept, provide:
 1. A concise `name` for the concept{name_lang_hint}.
-2. A beginner-friendly `description` explaining what it means with a simple analogy, in around 100 words{desc_lang_hint}.
+2. A intermediate-friendly `description` explaining what it means with a simple analogy, in around 100 words{desc_lang_hint}.
 3. A list of relevant `file_indices` (integers) of documents that discuss this concept, using the format `idx # path/comment`."""
             else:
                 analysis_instruction = f"""Analyze the codebase context.
@@ -194,7 +194,7 @@ Identify core most important abstractions to help those new to the codebase.
 
 For each abstraction, provide:
 1. A concise `name`{name_lang_hint}.
-2. A beginner-friendly `description` explaining what it is with a simple analogy, in around 100 words{desc_lang_hint}.
+2. A intermediate-friendly `description` explaining what it is with a simple analogy, in around 100 words{desc_lang_hint}.
 3. A list of relevant `file_indices` (integers) using the format `idx # path/comment`."""
 
             # For chunks other than the first, emphasize finding different concepts
@@ -390,7 +390,7 @@ Context (Abstractions, Descriptions, Code):
 {context}
 
 {language_instruction}Please provide:
-1. A high-level `summary` of the project's main purpose and functionality in a few beginner-friendly sentences{lang_hint}. Use markdown formatting with **bold** and *italic* text to highlight important concepts.
+1. A high-level `summary` of the project's main purpose and functionality in a few intermediate-friendly sentences{lang_hint}. Use markdown formatting with **bold** and *italic* text to highlight important concepts.
 2. A list (`relationships`) describing the key interactions between these abstractions. For each relationship, specify:
     - `from_abstraction`: Index of the source abstraction (e.g., `0 # AbstractionName1`)
     - `to_abstraction`: Index of the target abstraction (e.g., `1 # AbstractionName2`)
@@ -750,7 +750,7 @@ class WriteChapters(BatchNode):
             tone_note = f" (appropriate for {lang_cap} readers)"
 
         prompt = f"""
-{language_instruction}Write a very beginner-friendly tutorial chapter (in Markdown format) for the project `{project_name}` about the concept: "{abstraction_name}". This is Chapter {chapter_num}.
+{language_instruction}Write a very intermediate-friendly tutorial chapter (in Markdown format) for the project `{project_name}` about the concept: "{abstraction_name}". This is Chapter {chapter_num}.
 
 Concept Details{concept_details_note}:
 - Name: {abstraction_name}
@@ -773,7 +773,7 @@ Instructions for the chapter (Generate content in {language.capitalize()} unless
 
 - Begin with a high-level motivation explaining what problem this abstraction solves{instruction_lang_note}. Start with a central use case as a concrete example. The whole chapter should guide the reader to understand how to solve this use case. Make it very minimal and friendly to beginners.
 
-- If the abstraction is complex, break it down into key concepts. Explain each concept one-by-one in a very beginner-friendly way{instruction_lang_note}.
+- If the abstraction is complex, break it down into key concepts. Explain each concept one-by-one in a very intermediate-friendly way{instruction_lang_note}.
 
 - Explain how to use this abstraction to solve the use case{instruction_lang_note}. Give example inputs and outputs for code snippets (if the output isn't values, describe at a high level what will happen{instruction_lang_note}).
 
@@ -781,7 +781,7 @@ Instructions for the chapter (Generate content in {language.capitalize()} unless
 
 - Describe the internal implementation to help understand what's under the hood{instruction_lang_note}. First provide a non-code or code-light walkthrough on what happens step-by-step when the abstraction is called{instruction_lang_note}. It's recommended to use a simple sequenceDiagram with a dummy example - keep it minimal with at most 5 participants to ensure clarity. If participant name has space, use: `participant QP as Query Processing`. {mermaid_lang_note}.
 
-- Then dive deeper into code for the internal implementation with references to files. Provide example code blocks, but make them similarly simple and beginner-friendly. Explain{instruction_lang_note}.
+- Then dive deeper into code for the internal implementation with references to files. Provide example code blocks, but make them similarly simple and intermediate-friendly. Explain{instruction_lang_note}.
 
 - IMPORTANT: When you need to refer to other core abstractions covered in other chapters, ALWAYS use proper Markdown links like this: [Chapter Title](filename.md). Use the Complete Tutorial Structure above to find the correct filename and the chapter title{link_lang_note}. Translate the surrounding text.
 
@@ -795,7 +795,7 @@ Instructions for the chapter (Generate content in {language.capitalize()} unless
 
 - Output *only* the Markdown content for this chapter.
 
-Now, directly provide a super beginner-friendly Markdown output (DON'T need ```markdown``` tags):
+Now, directly provide a super intermediate-friendly Markdown output (DON'T need ```markdown``` tags):
 """
         chapter_content = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
         # Basic validation/cleanup

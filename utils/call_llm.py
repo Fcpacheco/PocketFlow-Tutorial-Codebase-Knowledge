@@ -68,7 +68,7 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
 
     # Call the OpenAI API if not in cache or cache disabled
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
     
     response = client.chat.completions.create(
         model=model,
